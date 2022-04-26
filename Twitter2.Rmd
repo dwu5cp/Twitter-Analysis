@@ -1,0 +1,341 @@
+---
+title: "Twitter Analysis Using R 2.0"
+author: "Darren Upton"
+geometry: margin=0.75in
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+fontsize: 12pt
+urlcolor: black
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, highlight=TRUE)
+# load twitter library - the rtweet library is recommended now over twitteR
+library(rtweet)
+library(twitteR)
+# plotting and pipes - tidyverse!
+library(ggplot2)
+library(dplyr)
+library(plyr)
+# text mining library
+library(tidytext)
+
+library(tidyverse) #can we actually do R without it? I'd say no
+library(ggtextures) #for glittery plots
+library(extrafont) #to add personalized fonts to ggplot output
+library(scales) #will be needed for percentage scales in ggplot
+library(widyr) #to find correlations between songs
+library(ggraph) #plotting network maps
+library(igraph) #same
+library(paletteer)
+library(wordcloud2)
+library(igraph)
+library(magrittr)
+library(wordcloud)
+library(BSDA)
+library(webshot)
+library(htmlwidgets)
+library(knitr)
+library(tinytex)
+library(lubridate)
+
+```
+
+```{r,eval=F,include=FALSE}
+# Key Info
+appname <- "RStudio Inquiries"
+key <- "ZGHxOXPzSE7WliRYCbu5UkSJj"
+secret <- "vDaEPt3g8bOKohj7rCUuemrNt5UIYBM5KMmbuqehllLBppxKdS"
+
+access_token<-"1157486996010479618-kRE1RvrrFa95aVJozBBa4AWSfwlv9P"
+access_secret<- "TSYjFrudv8AF21iLnrouxunDyzKUQ4odUc2F1qKzXJ2MX"
+
+# create token named "twitter_token"
+twitter_token <- create_token(
+  app = appname,
+  consumer_key = key,
+  consumer_secret = secret,
+  access_token = access_token,
+  access_secret = access_secret)
+
+```
+
+# Comparing Sentiments Between #LGBT and #MAGA
+LGBT Twitter and MAGA Twitter have countless differences that can be explored using packages to access Twitter's API to download dataframes of tweets. With these, the tweets can be processed using sentiment analysis to determine which group is the most "positive" and "negative" as well as other characteristics.
+
+```{r,eval=F,include=FALSE}
+#Collect New Tweets
+new.LGBT<-search_tweets("#LGBT", n = 15000, lang="en", 
+                    include_rts = FALSE, retryonratelimit = TRUE)
+new.MAGA<-search_tweets("#MAGA", n = 10000, lang="en", 
+                    include_rts = FALSE, retryonratelimit = TRUE)
+
+head(new.LGBT)
+head(new.MAGA)
+
+#Load Old Tweets
+load("#LGBT2.RData")
+load("#MAGA2.RData")
+
+#Combine Old and New & Check For Duplicates
+LGBT2<-unique(rbind(new.LGBT,LGBT2))
+MAGA2<-unique(rbind(new.MAGA,MAGA2))
+
+#Save Combined
+save(LGBT2,file="#LGBT2.RData")
+save(MAGA2,file="#MAGA2.RData")
+
+```
+
+### Get DF Of Useful Variables
+The data frame downloaded from Twitter has many unnecessary columns (at least for this analysis), thus shrinking the size of the data frame in use makes the analysis faster and less confusing.
+
+```{r}
+#Load Data Frames
+load("#LGBT.RData")
+load("#MAGA.RData")
+load("#LGBT2.RData")
+load("#MAGA2.RData")
+
+LGBT<-(rbind(LGBT,LGBT2))
+MAGA<-(rbind(MAGA,MAGA2))
+
+#Only one Tweet per account every 15 minutes
+sub.LGBT<-LGBT[!duplicated(cbind(LGBT$user_id,date(LGBT$created_at),
+                                 round(minute(LGBT$created_at)/15)*15,hour(LGBT$created_at))),]
+sub.MAGA<-MAGA[!duplicated(cbind(MAGA$user_id,date(MAGA$created_at),
+                                 round(minute(MAGA$created_at)/15)*15,hour(MAGA$created_at))),]
+#Combine into Single Data Frame
+LGBT.Text<-data.frame(account=sub.LGBT$screen_name ,text=sub.LGBT$text, time=sub.LGBT$created_at,
+                      type="LGBT",id=sub.LGBT$status_id)
+MAGA.Text<-data.frame(account=sub.MAGA$screen_name ,text=sub.MAGA$text, time=sub.MAGA$created_at,
+                      type="MAGA", id=sub.MAGA$status_id)
+Combined<-unique(rbind(LGBT.Text,MAGA.Text))
+
+#Total Number of Tweets
+summary(Combined)
+
+#summary(as.factor(MAGA$screen_name))
+#summary(as.factor(LGBT$screen_name))
+
+#format(object.size(sub.LGBT)/8, units = "MB")
+rm(LGBT,MAGA,sub.LGBT,sub.MAGA,LGBT.Text,MAGA.Text)
+
+head(Combined)
+
+
+
+```
+
+### Split Character Vectors into Individual Words & Tidy Data Frame of Words
+This removes "filler" words from the data frame, so that the sentiment analysis is more fruitful and the word cloud is useful.
+
+```{r}
+Tidy.Words<- Combined %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words,by="word") %>%
+  filter(is.na(word) != TRUE)
+head(Tidy.Words)
+
+```
+
+### Word Clouds
+This chunk gets counts for the words and places the top 0.1 % in a word cloud based on the type (LGBT or MAGA).
+
+```{r}
+#Character vectors that need to be removed from the mix
+remove.words<-c("https","t.co",1:10,"2a",2020,2021,"it's","i'm","lgbt",
+                "maga","tcot")
+
+#LGBT Counts
+LGBT.Count<-Tidy.Words %>%
+  filter(type=="LGBT") %>%
+  dplyr::count(word, sort = TRUE) %>%
+  filter(n > quantile(n, 0.999),
+         !word %in% remove.words)
+
+#MAGA Counts
+MAGA.Count<-Tidy.Words %>%
+  filter(type=="MAGA") %>%
+  dplyr::count(word, sort = TRUE) %>%
+  filter(n > quantile(n, 0.999),
+         !word %in% remove.words)
+
+#Word Clouds
+wordcloud2(LGBT.Count[1:75,])
+wordcloud2(MAGA.Count[1:75,])
+
+#Save Word Clouds
+#saveWidget(LGBT.cloud,"lgbt.html",selfcontained=F)
+#webshot("lgbt.html","LGBT.cloud.png",delay=5,vwidth=480,vheight=480)
+#saveWidget(MAGA.cloud,"maga.html",selfcontained=F)
+#webshot("maga.html","MAGA.cloud.png",delay=5,vwidth=480,vheight=480)
+
+#Base Word Cloud
+#wordcloud(words = LGBT.Count$word, freq = LGBT.Count$n,
+#min.freq = 1,scale=c(4.5,1),max.words=200, random.order=FALSE, rot.per=0.15,
+#colors=brewer.pal(8, "Dark2"))
+
+```
+
+### Get Sentiments
+This chunk gets the sentiment for each word using four different methods that will be compared in later chunks. 
+
+```{r}
+#First Sentiment Method (Values between -3 and 3)
+Sent1<-Tidy.Words %>%
+  inner_join(get_sentiments("afinn"),by="word") %>%
+  ddply(c(.(id),.(type),.(time)),summarize,Sentiment=sum(value)) %>%
+  filter(Sentiment < quantile(Sentiment, 0.999,na.rm=T),
+         Sentiment > quantile(Sentiment, 0.001,na.rm=T))
+
+#Second Sentiment Method (Values between -1 and 1)
+Sent2 <- Tidy.Words %>%
+  inner_join(get_sentiments("bing"),by="word") %>% 
+  #Count has issues with all of the other packages
+  dplyr::count(id, type, time, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative) %>%
+  filter(sentiment < quantile(sentiment, 0.9995,na.rm=T),
+         sentiment > quantile(sentiment, 0.0005,na.rm=T))
+
+#Third Sentiment Method (Multiple categories)
+Sent3<-Tidy.Words %>%
+  inner_join(get_sentiments("loughran"),by="word") %>%
+  #Very few "superfluous" words in df
+  filter(sentiment!="superfluous")
+
+#Fourth Sentiment Method (Multiple categories)
+Sent4<-Tidy.Words %>%
+  inner_join(get_sentiments("nrc"),by="word")
+
+```
+
+### Statatistical Analysis
+Student's two-sample t-tests are performed on the first and second sentiment method to compare the means. The null hypothesis states that there is no difference and the alternative states that the LGBT mean sentiment is greater (more positive) than the MAGA mean sentiment.
+
+```{r}
+#Sent1 compare means
+t.test(Sentiment~type,data=Sent1,alternative="greater",conf.level=0.99)
+
+#Sent2 compare means 
+t.test(sentiment~type,data=Sent2,alternative="greater",conf.level=0.99)
+
+```
+
+```{r,eval=F,include=F}
+#Bootstrap
+samp.sent1.lgbt<-Sent1.LGBT[sample(1:dim(Sent1.LGBT)[1],2000,replace=T),]
+samp.sent1.maga<-Sent1.MAGA[sample(1:dim(Sent1.MAGA)[1],2000,replace=T),]
+
+t.test(samp.sent1.lgbt$Sentiment,samp.sent1.maga$Sentiment,alternative="greater",conf.level=0.99)
+
+samp.sent2.lgbt<-Sent2.LGBT[sample(1:dim(Sent2.LGBT)[1],2000,replace=T),]
+samp.sent2.maga<-Sent2.MAGA[sample(1:dim(Sent2.MAGA)[1],2000,replace=T),]
+
+t.test(samp.sent2.lgbt$sentiment,samp.sent2.maga$sentiment,alternative="greater",conf.level=0.99)
+
+```
+
+### Plots
+This chunk plots the distributions of sentiments for the four methods.
+
+```{r}
+#General
+ggplot(Sent1,aes(x=Sentiment))+geom_bar(aes(y=..prop..),fill="dodgerblue2",alpha=0.7)+
+  geom_density(alpha=0.3,bw=0.5,fill="deepskyblue")+
+  geom_vline(aes(xintercept=mean(Sentiment)),color="blue", linetype="dashed", size=0.12)+
+  ggtitle("Distributions of Aggregate Sentiments")+theme_minimal()
+
+#Densities
+ggplot(Sent1,aes(x=Sentiment,fill=type,color=type))+geom_density(alpha=0.4,bw=0.8)+
+  ggtitle("Distributions of Sentiments Based of Hashtag")+theme_minimal()
+ggplot(Sent2,aes(x=sentiment,fill=type,color=type))+geom_density(alpha=0.4,bw=0.6)+
+  ggtitle("Distributions of Sentiments Based of Hashtag")+theme_minimal()
+
+#Other Sentiments
+ggplot(Sent3,aes(x=sentiment,group=type,fill=type))+
+  geom_bar(aes(y=..prop..,), position=position_dodge(),alpha=0.75)+theme_minimal()
+ggplot(Sent4,aes(x=sentiment,group=type,fill=type))+
+  geom_bar(aes(y=..prop..,), position=position_dodge(),alpha=0.75)+theme_minimal()
+
+```
+
+```{r}
+Sent1 %>% mutate(day=date(time)) %>% select(c(day,type,Sentiment)) %>% group_by(day,type) %>% summarise_all(list(mean,sd,length)) %>% ggplot(aes(day,fn1,color=type))+geom_point()+geom_smooth()+
+  facet_grid(vars(type),scales = "free")
+
+Sent1 %>% mutate(hour=hour(time)) %>% select(c(hour,type,Sentiment)) %>% group_by(hour,type) %>% summarise_all(list(mean,sd,length)) %>% ggplot(aes(hour,fn1,color=type))+geom_point()+geom_smooth()+
+  facet_grid(vars(type),scales = "free")
+
+Sent1 %>% mutate(weekday=factor(weekdays(time), 
+             levels=c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))) %>% select(c(weekday,type,Sentiment)) %>% group_by(weekday,type) %>% summarise_all(list(mean,sd,length)) %>%  ggplot(aes(weekday,fn1,color=as.factor(weekday),group=type))+geom_point()+geom_smooth()+
+  facet_grid(vars(type),scales = "free")
+
+Sent2 %>% mutate(day=date(time))  %>% select(c(day,type,sentiment)) %>% group_by(day,type) %>% summarise_all(mean) %>% ggplot(aes(day,sentiment,color=type))+geom_point()+geom_smooth()
+
+
+```
+
+```{r}
+after.june<- Sent1 %>% filter(time>as.Date("06/30/2020","%m/%d/%y"),type=="LGBT")
+june<- Sent1 %>% filter(time<as.Date("07/01/2020","%m/%d/%y"),type=="LGBT")
+
+t.test(june$Sentiment,after.june$Sentiment)
+
+```
+
+```{r}
+pre.election<- Sent1 %>% filter(time<as.Date("11/01/2020","%m/%d/%y"),type=="MAGA")
+after.election<- Sent1 %>% filter(time>as.Date("11/1/2020","%m/%d/%y"),type=="MAGA")
+
+t.test(pre.election$Sentiment,after.election$Sentiment)
+```
+
+```{r}
+Sent1 %>% filter(date(time)>as.Date("2/20/21","%m/%d/%y"),
+                 date(time)<as.Date("03/15/21","%m/%d/%y"),type=="MAGA") %>% summary
+
+head(date((Sent1$time)))
+
+
+Sent2 %>% filter(date(time)==as.Date("2/28/21","%m/%d/%y"),type=="MAGA") %>% select(sentiment) %>% summarise_all(mean)
+
+```
+
+```{r}
+date_counts <- Sent1 %>% mutate(date=date(time)) %>% select(type,date) %>% 
+                         group_by(date,type) %>% count() #%>% filter(freq<2500)
+
+ggplot(date_counts,aes(freq,fill=type,color=type)) + geom_density(alpha=0.25) #+ geom_smooth()
+
+ggplot(date_counts,aes(date,freq,color=type))+geom_point()+geom_smooth()
+
+date_counts %>% select(type,freq) %>% group_by(type) %>% summarize_all(median)
+
+```
+
+```{r}
+#date_counts %>% filter(date<as.Date("8/1/22","%m/%d/%y")) 
+date_counts %>% select(type,freq) %>% group_by(type) %>% summarize_all(sum)
+
+Combined %>% select(type) %>% group_by(type) %>% count
+
+Tidy.Words %>% select(type) %>% group_by(type) %>% count
+
+Sent1 %>% select(type) %>% group_by(type) %>% count
+Sent2 %>% select(type) %>% group_by(type) %>% count
+Sent3 %>% select(type) %>% group_by(type) %>% count
+Sent4 %>% select(type) %>% group_by(type) %>% count
+
+```
+
+```{r}
+LGBT.Count[1:100,]$word==MAGA.Count[1:75,]
+
+c(LGBT.Count[1:100,]$word,MAGA.Count[1:100,]$word)[duplicated(c(LGBT.Count[1:100,]$word,MAGA.Count[1:100,]$word))]
+
+```
+
